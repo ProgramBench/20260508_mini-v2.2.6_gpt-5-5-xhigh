@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""Write `_stats/tokens.json` mapping each instance to its output-token count.
+
+Output tokens are the generated tokens the model produced for the task, summed over
+every model response in the trajectory. They are a price-independent, cache-invariant
+measure of generative effort (input/prompt tokens are deliberately excluded, so prompt
+caching cannot influence the number). Reasoning/thinking tokens are already included in
+the output count.
+
+Reads every task's `<iid>/<iid>.traj.json` in this run. Only `output_tokens_from_traj`
+is trajectory-format-specific; adapt it for other agents and the output shape stays the same.
+"""
+
+import json
+from pathlib import Path
+
+RUN_DIR = Path(__file__).resolve().parent.parent
+
+
+def output_tokens_from_traj(traj: dict) -> int | None:
+    """mini-swe-agent format: sum `usage.completion_tokens` over each assistant response.
+
+    Each model call is stored on an assistant message under `extra.response.usage`. The
+    usage block is litellm-normalized, so `completion_tokens` holds output tokens (Anthropic
+    runs also expose the raw `output_tokens` key, used as a fallback). Adapt for other agents.
+    """
+    total = 0
+    found = False
+    for msg in traj.get("messages", []):
+        usage = ((msg.get("extra") or {}).get("response") or {}).get("usage") or {}
+        out = usage.get("completion_tokens")
+        if out is None:
+            out = usage.get("output_tokens")
+        if out is not None:
+            total += out
+            found = True
+    return total if found else None
+
+
+tokens = {}
+for traj in sorted(RUN_DIR.glob("[!_]*/*.traj.json")):
+    value = output_tokens_from_traj(json.loads(traj.read_text()))
+    if value is not None:
+        tokens[traj.parent.name] = value
+
+(RUN_DIR / "_stats").mkdir(exist_ok=True)
+(RUN_DIR / "_stats" / "tokens.json").write_text(json.dumps(tokens, indent=2, sort_keys=True))
+print(f"Wrote _stats/tokens.json for {len(tokens)} instance(s)")
