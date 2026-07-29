@@ -17,17 +17,32 @@ from pathlib import Path
 RUN_DIR = Path(__file__).resolve().parent.parent
 
 
-def output_tokens_from_traj(traj: dict) -> int | None:
-    """mini-swe-agent format: sum `usage.completion_tokens` over each assistant response.
+def _usage_of(msg: dict) -> dict | None:
+    """Locate the per-call usage block on a message, across mini-swe-agent formats.
 
-    Each model call is stored on an assistant message under `extra.response.usage`. The
-    usage block is litellm-normalized, so `completion_tokens` holds output tokens (Anthropic
-    runs also expose the raw `output_tokens` key, used as a fallback). Adapt for other agents.
+    Chat-Completions / litellm responses store it at `extra.response.usage`; the OpenAI
+    Responses API stores it directly at `msg.usage` (on a message with `role: None`).
+    """
+    resp = (msg.get("extra") or {}).get("response")
+    if isinstance(resp, dict) and isinstance(resp.get("usage"), dict):
+        return resp["usage"]
+    if isinstance(msg.get("usage"), dict):
+        return msg["usage"]
+    return None
+
+
+def output_tokens_from_traj(traj: dict) -> int | None:
+    """Sum output tokens over every model response in the trajectory.
+
+    `completion_tokens` (Chat Completions) and `output_tokens` (Responses API / Anthropic)
+    both count generated tokens including reasoning. Adapt for other agents.
     """
     total = 0
     found = False
     for msg in traj.get("messages", []):
-        usage = ((msg.get("extra") or {}).get("response") or {}).get("usage") or {}
+        usage = _usage_of(msg)
+        if not usage:
+            continue
         out = usage.get("completion_tokens")
         if out is None:
             out = usage.get("output_tokens")
